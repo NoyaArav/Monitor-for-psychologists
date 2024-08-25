@@ -56,28 +56,46 @@ def store_embeddings(patient_id, session_id, session_embeddings):
     cursor = conn.cursor()
 
     for entry in session_embeddings:
+        # Convert the numpy array embedding to bytes for storage
+        embedding_blob = np.array(entry["embedding"], dtype=np.float32).tobytes()
         cursor.execute('''INSERT INTO sessions (patient_id, session_id, sentence, speaker, embedding)
-                          VALUES (?, ?, ?, ?, ?)''', (patient_id, session_id, entry["sentence"], entry['speaker'], str(entry["embedding"])))
+                          VALUES (?, ?, ?, ?, ?)''', (patient_id, session_id, entry["sentence"], entry['speaker'], embedding_blob))
 
     conn.commit()
     conn.close()
+    
 
-def search_query(query_embedding, patient_id):
+def fetch_patient_embeddings(patient_id):
     conn = sqlite3.connect('patient_sessions.db')
     cursor = conn.cursor()
 
-    cursor.execute("SELECT sentence, embedding FROM sessions WHERE patient_id = ?", (patient_id,))
+    # Fetch embeddings for a specific patient
+    cursor.execute('SELECT id, sentence, embedding FROM sessions WHERE patient_id = ?', (patient_id,))
     results = cursor.fetchall()
-
-    matched_sentences = []
-    for sentence, stored_embedding_str in results:
-        stored_embedding = np.array(eval(stored_embedding_str))
-        similarity = np.dot(query_embedding, stored_embedding) / (np.linalg.norm(query_embedding) * np.linalg.norm(stored_embedding))
-
-        if similarity > 0.7:
-            matched_sentences.append((sentence, similarity))
-
     conn.close()
+
+    # Convert BLOB back to numpy array
+    embeddings = [(result[0], result[1], np.frombuffer(result[2], dtype=np.float32)) for result in results]
+    return embeddings
+
+    
+
+# def search_query(query_embedding, patient_id):
+#     conn = sqlite3.connect('patient_sessions.db')
+#     cursor = conn.cursor()
+
+#     cursor.execute("SELECT sentence, embedding FROM sessions WHERE patient_id = ?", (patient_id,))
+#     results = cursor.fetchall()
+
+#     matched_sentences = []
+#     for sentence, stored_embedding_str in results:
+#         stored_embedding = np.array(eval(stored_embedding_str))
+#         similarity = np.dot(query_embedding, stored_embedding) / (np.linalg.norm(query_embedding) * np.linalg.norm(stored_embedding))
+
+#         if similarity > 0.7:
+#             matched_sentences.append((sentence, similarity))
+
+#     conn.close()
 
     matched_sentences.sort(key=lambda x: x[1], reverse=True)
     return matched_sentences

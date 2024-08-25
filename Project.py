@@ -1,8 +1,8 @@
 import assemblyai as aai
 from openai import OpenAI
 
-from embedding_handler import generate_session_embeddings, generate_embedding
-from database_handler import create_tables, store_embeddings, search_query, add_patient
+from embedding_handler import generate_session_embeddings, generate_embedding, generate_query_embedding, search_similar_sentences
+from database_handler import create_tables, store_embeddings, add_patient, fetch_patient_embeddings
 
 aai.settings.api_key = "7a43eb14db35446586c8e9938f2b947c"
 
@@ -75,6 +75,20 @@ psychologist_sentiment_scores = {
     "Fulfillment": 5
 }
 
+
+def search_sentences(patient_id, query):
+    # Generate embedding for the query
+    query_embedding = generate_query_embedding(query)
+
+    # Fetch all embeddings for the specific patient from the database
+    patient_embeddings = fetch_patient_embeddings(patient_id)
+
+    # Find the most similar sentences
+    similar_sentences = search_similar_sentences(query_embedding, patient_embeddings)
+
+    return similar_sentences
+
+
 # Lists to store the data
 patient_data = []
 psychologist_data = []
@@ -123,10 +137,12 @@ except Exception as e:
     print(f"An error occurred during embedding or database operations: {e}")
 
 
-# Example search query
-query = "loneliness"
-query_embedding = generate_embedding(query)
-results = search_query(query_embedding, patient_id=1)
 
-for sentence, similarity in results:
-    print(f"Sentence: {sentence}, Similarity: {similarity}")
+patient_id = 1  # Example patient ID
+query = "studies"
+results = search_sentences(patient_id, query)
+
+# Display the top 5 results
+for result in results[:5]:
+    print(f"Sentence: {result[1]} (Similarity: {result[2]:.4f})")
+
