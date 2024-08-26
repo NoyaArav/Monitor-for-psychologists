@@ -1,5 +1,6 @@
 import assemblyai as aai
 from openai import OpenAI
+import json
 
 from embedding_handler import generate_session_embeddings, generate_embedding, generate_query_embedding, search_similar_sentences
 from database_handler import create_tables, store_embeddings, add_patient, fetch_patient_embeddings
@@ -14,36 +15,6 @@ openai_api_model = "gpt-3.5-turbo"
 
 audio_file = "/Users/noyaarav/Desktop/Final-Project-From-Idea-To-Reality/audio_files/13mins_session_depression.mp4"
 # audio_file = "https://www.youtube.com/watch?v=7LD8iC4NqXM" 
-
-def get_sentiment_patient(text):
-  
-  response = client.chat.completions.create(
-      model="gpt-3.5-turbo",
-      temperature=0, # Use a larger temperature value to generate more diverse results.
-      messages=[
-          {"role": "system", "content": "You are a sentiment analysis assistant. Your task is to analyze the sentiment of the following text and describe it with 1 word only (no further explanation) by choosing the most accurate sentiment from following sentiments: Euphoria, Excitement, Happiness, Hopefulness, Contentment, Natural, Discomfort, Concern, Sadness, Anxiety, Anger, Despair. Please consider the fact that the text is a sentence said by a patient during a psychologic session. Also consider the overall tone of the discussion, the emotion conveyed by the language used, and the context in which words and phrases are used."},
-          {"role": "user", "content": f"The text for your sentiment analyze: {text}"}
-      ],
-    
-  )
-  sentiment = response.choices[0].message.content
-  return sentiment
-
-  
-def get_sentiment_psychologist(text):
-
-    response = client.chat.completions.create(
-        model="gpt-3.5-turbo",
-        temperature=0, # Use a larger temperature value to generate more diverse results.
-        messages=[
-            {"role": "system", "content": "You are a sentiment analysis assistant. Your task is to analyze the sentiment of the following text and describe it with 1 word only (no further explanation) by choosing the most accurate sentiment from following sentiments: Fulfillment, Optimism, Empathy, Encouragement, Contentment, Natural, Concern, Frustration, Sadness, Helplessness, Overwhelm. Please consider the fact that the text is a sentence said by a psychologist during a session with a patient. Also consider the overall tone of the discussion, the emotion conveyed by the language used, and the context in which words and phrases are used.(for example, if it a question asked for a specific purpose, the emotion represented in the question is not necessarily the emotion of the psychologist)"},
-            {"role": "user", "content": f"The text for your sentiment analyze: {text}"}
-        ],
-        
-    )
-
-    sentiment = response.choices[0].message.content
-    return sentiment
 
 
 # Sentiment score dictionaries
@@ -75,6 +46,70 @@ psychologist_sentiment_scores = {
     "Fulfillment": 5
 }
 
+def get_sentiment_patient(text):
+
+  sentiments = [
+    "Euphoria", "Excitement", "Happiness", "Hopefulness", "Contentment", 
+    "Natural", "Discomfort", "Sadness", "Anxiety", "Anger", "Despair"
+    ]
+  
+  response = client.chat.completions.create(
+      model="gpt-3.5-turbo",
+      temperature=0, # Use a larger temperature value to generate more diverse results.
+     messages=[
+            {"role": "user", "content": f"""Given the following sentence that was said by a patient during a therapy session:"
+             "{text}"
+             Which of the following sentiments best describes it? Choose one of the following: {", ".join(sentiments)}.
+             return only one word - the correct sentiment from the list above."""}
+        ],
+  )
+  sentiment = response.choices[0].message.content
+  return sentiment
+
+def get_sentiment_psychologist(text):
+
+    sentiments = [
+    "Fulfillment" , "Optimism" , "Empathy", "Encouragement", "Contentment", "Natural", 
+    "Concern", "Frustration", "Sadness", "Helplessness", "Overwhelm"
+    ]
+
+    response = client.chat.completions.create(
+      model="gpt-3.5-turbo",
+      temperature=0, # Use a larger temperature value to generate more diverse results.
+     messages=[
+            {"role": "user", "content": f"""Given the following sentence that was said by a psychologist during a therapy session:
+             "{text}"
+             Which of the following sentiments best describes it? Choose one of the following: {", ".join(sentiments)}.
+             return only one word - the correct sentiment from the list above."""}
+        ],
+  )
+
+    sentiment = response.choices[0].message.content
+    return sentiment
+  
+  
+def determine_speaker_roles(transcript):
+    # Prepare a sample of the conversation
+    sample = "\n".join([f"Speaker {u.speaker}: {u.text}" for u in transcript.utterances[:15]])
+    
+    response = client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        temperature=0,
+        messages=[
+            {"role": "system", "content": "You are an AI trained to analyze conversation transcripts and determine which speaker is the psychologist and which is the patient."},
+            {"role": "user", "content": f"""Based on the following transcript sample, determine whether Speaker A is the psychologist and Speaker B is the patient, or vice versa. 
+            Return your answer as a JSON object with keys 'psychologist' and 'patient', and values 'A' or 'B'.
+
+            Transcript sample:
+            {sample}"""}
+        ]
+    )
+    
+    result = response.choices[0].message.content
+    # Parse the JSON string to a Python dictionary
+    roles = json.loads(result)
+    return roles
+
 
 def search_sentences(patient_id, query):
     # Generate embedding for the query
@@ -94,7 +129,6 @@ patient_data = []
 psychologist_data = []
 
 
-
 config = aai.TranscriptionConfig(
   speaker_labels=True,
   speakers_expected=2
@@ -112,20 +146,39 @@ add_patient(patient_id, name, birthdate, notes)
 
 # Transcript and sentiment analysis
 transcript = aai.Transcriber().transcribe(audio_file, config)
+
+# Determine speaker roles
+speaker_roles = determine_speaker_roles(transcript)
+psychologist_speaker = speaker_roles['psychologist']
+patient_speaker = speaker_roles['patient']
+
+# Check if speaker roles determined successfully
+# print(f"Determined roles: Psychologist is Speaker {psychologist_speaker}, Patient is Speaker {patient_speaker}")
+
 session_id = "session_001"  # Example session ID
 
 for i, utterance in enumerate(transcript.utterances):
-  print(f"Speaker {utterance.speaker}: {utterance.text}")
-  if utterance.speaker == 'B':
-    sentiment = get_sentiment_patient(utterance.text)
-    score = patient_sentiment_scores.get(sentiment, 0)
-    patient_data.append({"sentence": utterance.text, "sentiment": sentiment, "score": score, "index": i})
-    # print(f"Sentiment: {sentiment}")
-  elif utterance.speaker == 'A':
-    sentiment = get_sentiment_psychologist(utterance.text)
-    score = psychologist_sentiment_scores.get(sentiment, 0)
-    psychologist_data.append({"sentence": utterance.text, "sentiment": sentiment, "score": score, "index": i})
-    # print(f"Sentiment: {sentiment}")  
+    words = utterance.text.split()
+    if utterance.speaker == patient_speaker:
+        if len(words) > 4:
+            sentiment = get_sentiment_patient(utterance.text)
+            score = patient_sentiment_scores.get(sentiment, 0)
+        else:
+            sentiment = None
+            score = 0
+        patient_data.append({"sentence": utterance.text, "sentiment": sentiment, "score": score, "index": i})
+    elif utterance.speaker == psychologist_speaker:
+        if len(words) > 4:
+            sentiment = get_sentiment_psychologist(utterance.text)
+            score = psychologist_sentiment_scores.get(sentiment, 0)
+        else:
+            sentiment = None
+            score = 0
+        psychologist_data.append({"sentence": utterance.text, "sentiment": sentiment, "score": score, "index": i})
+    
+    print(f"{'Psychologist' if utterance.speaker == psychologist_speaker else 'Patient'} : {utterance.text}")
+    print(f"Sentiment: {sentiment}")
+    
   
 # Generate and store embeddings
 try:
