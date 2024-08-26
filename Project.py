@@ -182,7 +182,7 @@ for i, utterance in enumerate(transcript.utterances):
   
 # Generate and store embeddings
 try:
-    session_embeddings = generate_session_embeddings(transcript)
+    session_embeddings = generate_session_embeddings(transcript, patient_speaker, patient_data, psychologist_data)
     print("Embeddings generated successfully.")
     store_embeddings(patient_id=1, session_id=session_id, session_embeddings=session_embeddings)
     print("Embeddings stored successfully in the database.")

@@ -14,14 +14,20 @@ def generate_embedding(text):
     embedding = response.data[0].embedding
     return embedding
 
-def generate_session_embeddings(transcript):
+def generate_session_embeddings(transcript, patient_speaker, patient_data, psychologist_data):
     session_embeddings = []
-    for utterance in transcript.utterances:
+    for i, utterance in enumerate(transcript.utterances):
         embedding = generate_embedding(utterance.text)
+        if utterance.speaker == patient_speaker:
+            sentiment = next((item['sentiment'] for item in patient_data if item['index'] == i), None)
+        else:
+            sentiment = next((item['sentiment'] for item in psychologist_data if item['index'] == i), None)
+        
         session_embeddings.append({
             "sentence": utterance.text, 
-            "speaker": 'patient' if utterance.speaker == 'B' else 'psychologist',  # Distinguishing speaker
-            "embedding": embedding
+            "speaker": 'patient' if utterance.speaker == patient_speaker else 'psychologist',
+            "embedding": embedding,
+            "sentiment": sentiment
         })
     return session_embeddings
 
@@ -36,10 +42,12 @@ def search_similar_sentences(query_embedding, patient_embeddings):
     query_embedding = np.array(query_embedding).reshape(1, -1)
 
     for sentence_id, sentence, embedding in patient_embeddings:
-        # Ensure embedding is a numpy array and compute cosine similarity
-        embedding = np.array(embedding).reshape(1, -1)
-        similarity_score = cosine_similarity(query_embedding, embedding)[0][0]
-        similarities.append((sentence_id, sentence, similarity_score))
+        words = sentence.split()
+        if len(words) > 4:
+            # Ensure embedding is a numpy array and compute cosine similarity
+            embedding = np.array(embedding).reshape(1, -1)
+            similarity_score = cosine_similarity(query_embedding, embedding)[0][0]
+            similarities.append((sentence_id, sentence, similarity_score))
 
     # Sort by similarity score in descending order
     similarities.sort(key=lambda x: x[2], reverse=True)
