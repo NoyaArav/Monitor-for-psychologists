@@ -3,6 +3,8 @@ from openai import OpenAI
 import json
 
 from embedding_handler import generate_session_embeddings, generate_embedding, generate_query_embedding, search_similar_sentences
+from sklearn.metrics.pairwise import cosine_similarity
+
 from database_handler import create_tables, store_embeddings, add_patient, fetch_patient_embeddings
 
 aai.settings.api_key = "7a43eb14db35446586c8e9938f2b947c"
@@ -111,6 +113,47 @@ def determine_speaker_roles(transcript):
     return roles
 
 
+def detect_drastic_changes(data, threshold):
+    """
+    Detects drastic changes in sentiment scores.
+
+    Parameters:
+    - data: List of dictionaries containing 'sentence', 'sentiment', 'score', and 'index'.
+    - threshold: The minimum change in sentiment score required to consider a change as drastic.
+
+    Returns:
+    - drastic_changes: A list of tuples containing (index_start, index_end, change).
+      - index_start: The index of the starting sentence.
+      - index_end: The index of the ending sentence.
+      - change: The actual change in sentiment score (can be positive or negative).
+    """
+    drastic_changes = []
+    
+    # Iterate over the data to find drastic changes
+    for i in range(1, len(data)):
+        # Calculate the number of words in the current and previous sentences
+        words_current = len(data[i]['sentence'].split())
+        words_previous = len(data[i - 1]['sentence'].split())
+        
+        # Check if both sentence has more than 5 words
+        if words_current > 5 and words_previous > 5:
+            score_change = data[i]['score'] - data[i - 1]['score']
+            
+            # Check if the absolute change is greater than or equal to the threshold
+            if abs(score_change) >= threshold:
+                # Append the change details including the actual score change
+                drastic_changes.append((data[i - 1]['index'], data[i]['index'], score_change))
+
+                # Print debugging information
+                print(f"Drastic change detected between indices {data[i - 1]['index']} and {data[i]['index']}:")
+                print(f"Sentence {data[i - 1]['index']}: {data[i - 1]['sentence']}")
+                print(f"Sentence {data[i]['index']}: {data[i]['sentence']}")
+                print(f"Sentiment change: {score_change}")
+                print("---")
+    
+    return drastic_changes
+
+
 def search_sentences(patient_id, query):
     # Generate embedding for the query
     query_embedding = generate_query_embedding(query)
@@ -166,7 +209,7 @@ for i, utterance in enumerate(transcript.utterances):
         else:
             sentiment = None
             score = 0
-        patient_data.append({"sentence": utterance.text, "sentiment": sentiment, "score": score, "index": i})
+        patient_data.append({"sentence": utterance.text, "sentiment": sentiment, "score": score, "index": i + 1})
     elif utterance.speaker == psychologist_speaker:
         if len(words) > 4:
             sentiment = get_sentiment_psychologist(utterance.text)
@@ -174,7 +217,7 @@ for i, utterance in enumerate(transcript.utterances):
         else:
             sentiment = None
             score = 0
-        psychologist_data.append({"sentence": utterance.text, "sentiment": sentiment, "score": score, "index": i})
+        psychologist_data.append({"sentence": utterance.text, "sentiment": sentiment, "score": score, "index": i + 1})
     
     print(f"{'Psychologist' if utterance.speaker == psychologist_speaker else 'Patient'} : {utterance.text}")
     print(f"Sentiment: {sentiment}")
@@ -191,11 +234,27 @@ except Exception as e:
 
 
 
-patient_id = 1  # Example patient ID
-query = "studies"
-results = search_sentences(patient_id, query)
+# Define thresholds for drastic emotion change
+patient_threshold = 4
+psychologist_threshold = 7
 
-# Display the top 5 results
-for result in results[:5]:
-    print(f"Sentence: {result[1]} (Similarity: {result[2]:.4f})")
+# Detect drastic changes for patient
+# patient_drastic_changes = detect_drastic_changes(patient_data, patient_threshold)
+
+# Detect drastic changes for psychologist
+psychologist_drastic_changes = detect_drastic_changes(psychologist_data, psychologist_threshold)
+
+# Example output
+# print("Drastic changes for patient:", patient_drastic_changes)
+# print("Drastic changes for psychologist:", psychologist_drastic_changes)
+
+
+
+# patient_id = 1  # Example patient ID
+# query = "studies"
+# results = search_sentences(patient_id, query)
+
+# # Display the top 5 results
+# for result in results[:5]:
+#     print(f"Sentence: {result[1]} (Similarity: {result[2]:.4f})")
 
