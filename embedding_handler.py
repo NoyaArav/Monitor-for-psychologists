@@ -1,6 +1,7 @@
 # embedding_handler.py
 from openai import OpenAI
 from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.cluster import KMeans
 import numpy as np
 
 client = OpenAI(
@@ -19,9 +20,9 @@ def generate_session_embeddings(transcript, patient_speaker, patient_data, psych
     for i, utterance in enumerate(transcript.utterances):
         embedding = generate_embedding(utterance.text)
         if utterance.speaker == patient_speaker:
-            sentiment = next((item['sentiment'] for item in patient_data if item['index'] == i), None)
+            sentiment = next((item['sentiment'] for item in patient_data if item['index'] == i + 1), None)
         else:
-            sentiment = next((item['sentiment'] for item in psychologist_data if item['index'] == i), None)
+            sentiment = next((item['sentiment'] for item in psychologist_data if item['index'] == i + 1), None)
         
         session_embeddings.append({
             "sentence": utterance.text, 
@@ -52,3 +53,5 @@ def search_similar_sentences(query_embedding, patient_embeddings):
     # Sort by similarity score in descending order
     similarities.sort(key=lambda x: x[2], reverse=True)
     return similarities
+
+

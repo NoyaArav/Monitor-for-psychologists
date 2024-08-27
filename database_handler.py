@@ -27,15 +27,7 @@ def create_tables():
         FOREIGN KEY(patient_id) REFERENCES patients(patient_id)
     )
     ''')
-    
-    # # Check if 'speaker' column exists, if not, add it
-    # cursor.execute("PRAGMA table_info(sessions)")
-    # columns = [column[1] for column in cursor.fetchall()]
-    # if 'speaker' not in columns:
-    #     cursor.execute('ALTER TABLE sessions ADD COLUMN speaker TEXT')
 
-    # conn.commit()
-    # conn.close()
     
 def add_patient(patient_id, name, birthdate, notes):
     conn = sqlite3.connect('patient_sessions.db')

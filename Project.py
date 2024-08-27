@@ -15,8 +15,8 @@ client = OpenAI(
 openai_api_model = "gpt-3.5-turbo"
 
 
-audio_file = "/Users/noyaarav/Desktop/Final-Project-From-Idea-To-Reality/audio_files/13mins_session_depression.mp4"
-# audio_file = "https://www.youtube.com/watch?v=7LD8iC4NqXM" 
+# audio_file = "/Users/noyaarav/Desktop/Final-Project-From-Idea-To-Reality/audio_files/13mins_session_depression.mp4"
+audio_file = "/Users/noyaarav/Desktop/Final-Project-From-Idea-To-Reality/audio_files/session2_social_anxiety_Hannah.mp4"
 
 
 # Sentiment score dictionaries
@@ -128,6 +128,7 @@ def detect_drastic_changes(data, threshold):
       - change: The actual change in sentiment score (can be positive or negative).
     """
     drastic_changes = []
+    used_indices = set()  # To track used indices and avoid repetition
     
     # Iterate over the data to find drastic changes
     for i in range(1, len(data)):
@@ -135,14 +136,22 @@ def detect_drastic_changes(data, threshold):
         words_current = len(data[i]['sentence'].split())
         words_previous = len(data[i - 1]['sentence'].split())
         
-        # Check if both sentence has more than 5 words
-        if words_current > 5 and words_previous > 5:
+        # Check if both sentence has more than 5 words and have not been used in a previous drastic change
+        if (
+            words_current > 5 and words_previous > 5 and
+            data[i]['index'] not in used_indices and 
+            data[i - 1]['index'] not in used_indices
+        ):
             score_change = data[i]['score'] - data[i - 1]['score']
             
             # Check if the absolute change is greater than or equal to the threshold
             if abs(score_change) >= threshold:
                 # Append the change details including the actual score change
                 drastic_changes.append((data[i - 1]['index'], data[i]['index'], score_change))
+                
+                # Mark these indices as used
+                used_indices.add(data[i]['index'])
+                used_indices.add(data[i - 1]['index'])
 
                 # Print debugging information
                 print(f"Drastic change detected between indices {data[i - 1]['index']} and {data[i]['index']}:")
@@ -151,7 +160,91 @@ def detect_drastic_changes(data, threshold):
                 print(f"Sentiment change: {score_change}")
                 print("---")
     
-    return drastic_changes
+    # Sort by absolute score change in descending order, then by starting index in ascending order
+    drastic_changes.sort(key=lambda x: (-abs(x[2]), x[0]))
+    
+    # Return at most 7 changes
+    return drastic_changes[:7]
+  
+
+def get_context_for_change(transcript, index1, index2):
+  # Function to get a 7-sentence context around the change
+    
+    context = []
+
+    # Ensure indices are within the bounds of the transcript
+    context.append(transcript.utterances[max(0, index1 - 3)].text)  # 2 sentences before
+    context.append(transcript.utterances[max(0, index1 - 2)].text)  # 1 sentence before
+    context.append(transcript.utterances[index1 - 1].text)              # First sentence in the change
+    context.append(transcript.utterances[index1].text)          # Sentence in between (response by the other person)
+    context.append(transcript.utterances[index2 - 1].text)              # Second sentence in the change
+    context.append(transcript.utterances[min(len(transcript.utterances) - 1, index2)].text)  # 1 sentence after
+    context.append(transcript.utterances[min(len(transcript.utterances) - 1, index2 + 1)].text)  # 2 sentences after
+    
+    return context
+
+
+def identify_topic_of_change(sentences, sentence_1, sentence_2, change, emotion_1, emotion_2, speaker):
+    """
+    Identifies the topic of conversation that caused a drastic change in the emotion of the patient.
+
+    Parameters:
+    - sentences: A list of 7 sentences from the transcript to provide context.
+    - sentence_1: The first sentence causing the drastic change.
+    - sentence_2: The second sentence causing the drastic change.
+    - change: The value of the change (positive or negative).
+    - emotion_1: The emotion identified for sentence_1.
+    - emotion_2: The emotion identified for sentence_2.
+    - openai_client: The OpenAI client object for sending requests to ChatGPT.
+
+    Returns:
+    - The topic of the conversation causing the drastic change, or "No drastic emotion change" if no actual change is detected.
+    """
+    
+    # Determine if the change is positive or negative
+    change_type = "positive" if change > 0 else "negative"
+    
+    second_speaker = "psychologist" if speaker == "patient" else "patient"
+
+    # Construct the prompt for ChatGPT
+    prompt = f"""
+    
+Based on the following context, please determine the topic of conversation that caused a drastic {change_type} change in the emotion of the {speaker}:
+
+Context sentences (for reference):
+1. {speaker}: {sentences[0]}
+2. {second_speaker}: {sentences[1]}
+3. {speaker}: {sentences[2]} (First sentence in the drastic change)
+4. {second_speaker}: {sentences[3]} (Response by the {second_speaker})
+5. {speaker}: {sentences[4]} (Second sentence in the drastic change)
+6. {second_speaker}: {sentences[5]}
+7. {speaker}: {sentences[6]}
+
+Specific sentences detected to have caused the drastic change:
+- Sentence 1: "{sentence_1}" with emotion "{emotion_1}".
+- Sentence 2: "{sentence_2}" with emotion "{emotion_2}".
+
+Drastic change value: {change} (indicating a {change_type} change).
+
+Analyze the sentences above and provide the topic of conversation that caused the drastic change. Your answer should include only the topic and it should be 8 words at most. 
+If there is no actual drastic change in emotion in the provided context and the detection might be a mistake, please return "No drastic emotion change".
+"""
+
+    # Send the prompt to ChatGPT
+    response = client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        temperature=0,  # Lower temperature for more deterministic output
+        messages=[
+            {"role": "system", "content": "You are an AI assistant tasked with analyzing transcripts of therapy sessions to identify emotional changes and the topics that cause them."},
+            {"role": "user", "content": prompt}
+        ],
+    )
+
+    # Extract the content of the response
+    topic = response.choices[0].message.content.strip()
+
+    return topic
+
 
 
 def search_sentences(patient_id, query):
@@ -181,10 +274,10 @@ config = aai.TranscriptionConfig(
 create_tables()
 
 # Add a new patient 
-patient_id = 1  # Replace with the actual ID or fetch dynamically
-name = "John Doe"
-birthdate = "1980-01-01"
-notes = "No specific notes"
+patient_id = 2  # Replace with the actual ID or fetch dynamically
+name = "Hannah"
+birthdate = "2000-06-01"
+notes = "Social anxiety"
 add_patient(patient_id, name, birthdate, notes)
 
 # Transcript and sentiment analysis
@@ -227,7 +320,7 @@ for i, utterance in enumerate(transcript.utterances):
 try:
     session_embeddings = generate_session_embeddings(transcript, patient_speaker, patient_data, psychologist_data)
     print("Embeddings generated successfully.")
-    store_embeddings(patient_id=1, session_id=session_id, session_embeddings=session_embeddings)
+    store_embeddings(patient_id, session_id=session_id, session_embeddings=session_embeddings)
     print("Embeddings stored successfully in the database.")
 except Exception as e:
     print(f"An error occurred during embedding or database operations: {e}")
@@ -239,17 +332,51 @@ patient_threshold = 4
 psychologist_threshold = 7
 
 # Detect drastic changes for patient
-# patient_drastic_changes = detect_drastic_changes(patient_data, patient_threshold)
+patient_drastic_changes = detect_drastic_changes(patient_data, patient_threshold)
 
 # Detect drastic changes for psychologist
-psychologist_drastic_changes = detect_drastic_changes(psychologist_data, psychologist_threshold)
+# psychologist_drastic_changes = detect_drastic_changes(psychologist_data, psychologist_threshold)
 
 # Example output
 # print("Drastic changes for patient:", patient_drastic_changes)
 # print("Drastic changes for psychologist:", psychologist_drastic_changes)
 
+# Analyze each drastic change for the patient
+for change in patient_drastic_changes:
+    index1, index2, change_value = change
+    # Get emotions and sentences from patient data
+    emotion_1 = next(item['sentiment'] for item in patient_data if item['index'] == index1)
+    emotion_2 = next(item['sentiment'] for item in patient_data if item['index'] == index2)
+    sentence_1 = next(item['sentence'] for item in patient_data if item['index'] == index1)
+    sentence_2 = next(item['sentence'] for item in patient_data if item['index'] == index2)
+    
+    # Get 7-sentence context
+    context = get_context_for_change(transcript, index1, index2)
+    
+    print("Drastic change for patient:", change)
+    
+    # Identify the topic causing the change
+    topic = identify_topic_of_change(context, sentence_1, sentence_2, change_value, emotion_1, emotion_2, "patient")
+    print(f"Identified Topic for Patient's Drastic Change: {topic}")
+
+# # Analyze each drastic change for the psychologist
+# for change in psychologist_drastic_changes:
+#     index1, index2, change_value = change
+#     # Get emotions and sentences from psychologist data
+#     emotion_1 = next(item['sentiment'] for item in psychologist_data if item['index'] == index1)
+#     emotion_2 = next(item['sentiment'] for item in psychologist_data if item['index'] == index2)
+#     sentence_1 = next(item['sentence'] for item in psychologist_data if item['index'] == index1)
+#     sentence_2 = next(item['sentence'] for item in psychologist_data if item['index'] == index2)
+    
+#     # Get 7-sentence context
+#     context = get_context_for_change(transcript, index1, index2)
+    
+#     # Identify the topic causing the change
+#     topic = identify_topic_of_change(context, sentence_1, sentence_2, change_value, emotion_1, emotion_2, "psychologist")
+#     print(f"Identified Topic for Psychologist's Drastic Change: {topic}")
 
 
+# Example usage for embedding based search
 # patient_id = 1  # Example patient ID
 # query = "studies"
 # results = search_sentences(patient_id, query)
