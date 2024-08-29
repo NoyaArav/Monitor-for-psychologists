@@ -1,10 +1,12 @@
 import assemblyai as aai
 from openai import OpenAI
 import json
+import os
+import sqlite3
+from sklearn.metrics.pairwise import cosine_similarity
+import plotly.graph_objs as go
 
 from embedding_handler import generate_embedding, generate_query_embedding, search_similar_sentences
-from sklearn.metrics.pairwise import cosine_similarity
-
 from database_handler import create_tables, insert_session_data, update_session_embedding, add_patient, fetch_patient_embeddings, fetch_session_data
 
 
@@ -215,69 +217,171 @@ def process_session(audio_file, patient_id, session_id):
         update_session_embedding(session_id, utterance.text, embedding)
 
     print("Session processing and data storage completed successfully.")
-
-
-# Initialize the database
-create_tables()
-
-# Add a new patient 
-patient_id = 2  # Replace with the actual ID or fetch dynamically
-name = "Hannah"
-birthdate = "2000-06-01"
-notes = "Social anxiety"
-add_patient(patient_id, name, birthdate, notes)
-
-# Process the session
-session_id = "session_001"
-process_session(audio_file, patient_id, session_id)
-
-# Fetch session data for analysis
-print("Fetching session data...")
-session_data = fetch_session_data(patient_id, session_id)
-print(f"Fetched {len(session_data)} entries from the database.")
-
-# Separate patient and psychologist data
-print("Separating patient and psychologist data...")
-patient_data = [entry for entry in session_data if entry['speaker'] == 'patient']
-psychologist_data = [entry for entry in session_data if entry['speaker'] == 'psychologist']
-print(f"Patient data: {len(patient_data)} entries")
-print(f"Psychologist data: {len(psychologist_data)} entries")
-
-# Define thresholds for drastic emotion change
-patient_threshold = 3
-
-# Detect drastic changes for patient
-print("\nDetecting drastic changes for patient...")
-patient_drastic_changes = detect_drastic_changes(patient_data, patient_threshold)
-
-print("\nAnalyzing each drastic change for the patient...")
-for change in patient_drastic_changes:
-    id1, id2, change_value = change
-    print(f"\nAnalyzing change between ids {id1} and {id2} with change value {change_value}")
     
-    context = [entry for entry in session_data if id1 - 3 <= entry['id'] <= id2 + 3]
-    sentence_1 = next(item['sentence'] for item in patient_data if item['id'] == id1)
-    sentence_2 = next(item['sentence'] for item in patient_data if item['id'] == id2)
-    emotion_1 = next(item['sentiment'] for item in patient_data if item['id'] == id1)
-    emotion_2 = next(item['sentiment'] for item in patient_data if item['id'] == id2)
+    
+    
+def process_audio_file(patient_id, audio_file):
+    """
+    Processes the uploaded audio file by calling the process_session function.
+    It generates a new session ID and stores all the session data into the database.
 
-    print(f"Context size: {len(context)} sentences")
-    print(f"Sentence 1: {sentence_1[:50]}...")
-    print(f"Sentence 2: {sentence_2[:50]}...")
-    print(f"Emotion 1: {emotion_1}")
-    print(f"Emotion 2: {emotion_2}")
+    Parameters:
+    - patient_id: ID of the patient associated with the session
+    - audio_file: Uploaded audio file object
+    """
+    # Save the uploaded file temporarily
+    file_path = f"temp/{audio_file.name}"
+    with open(file_path, "wb") as f:
+        f.write(audio_file.getbuffer())
 
-    topic = identify_topic_of_change([item['sentence'] for item in context], sentence_1, sentence_2, change_value, emotion_1, emotion_2, "patient")
-    print(f"Identified Topic for Patient's Drastic Change: {topic}")
+    # Generate a new session ID
+    session_id = generate_new_session_id(patient_id)
 
-print("\nDrastic change analysis complete.")
+    # Call the process_session function to handle transcription, sentiment, and storage
+    process_session(file_path, patient_id, session_id)
 
-# Example of embedding-based search
-print("\nPerforming embedding-based search...")
-query = "studies"
-results = search_similar_sentences(patient_id, query)
+    # Clean up the temporary file
+    os.remove(file_path)
 
-# Display the top 5 results
-print(f"\nTop 5 results for query '{query}':")
-for result in results[:5]:
-    print(f"Sentence: {result[1][:50]}... (Similarity: {result[2]:.4f})")
+def generate_new_session_id(patient_id):
+    """
+    Generates a new session ID for the patient by finding the maximum session ID
+    associated with the patient and adding one.
+
+    Parameters:
+    - patient_id: ID of the patient
+
+    Returns:
+    - A new session ID (integer)
+    """
+    conn = sqlite3.connect('patient_sessions.db')  # Replace with your actual database file
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT MAX(session_id) FROM sessions WHERE patient_id = ?", (patient_id,))
+    max_session_id = cursor.fetchone()[0]
+
+    conn.close()
+
+    # If no sessions exist yet for this patient, start with 1
+    if max_session_id is None:
+        return 1
+    else:
+        return max_session_id + 1
+      
+      
+      
+
+def generate_sentiment_graph(session, title, sentiment_scores):
+    """
+    Generates a sentiment graph for a given session.
+    
+    Parameters:
+    - session: A dictionary containing session data, including sentences, sentiments, and scores.
+
+    Returns:
+    - A Plotly Figure object representing the sentiment graph.
+    """
+    fig = go.Figure()
+
+    # Extract sentence indices, sentiment scores, and text data
+    x = [i + 1 for i in range(len(session))]
+    y = [row['sentiment_score'] for row in session]
+    text = [f"Sentence: {row['sentence']}<br>Sentiment: {row['sentiment']}" for row in session]
+    color = ['green' if score > 0 else 'red' for score in y]
+
+    # Add scatter plot for sentiment scores
+    fig.add_trace(go.Scatter(
+        x=x,
+        y=y,
+        mode='markers',
+        marker=dict(color=color),
+        text=text,
+        hoverinfo='text'
+    ))
+
+    # Update graph layout
+    fig.update_layout(
+        title=title,
+        xaxis_title="Sentence Number",
+        yaxis_title="Sentiment Score",
+        yaxis=dict(
+            tickmode='array',
+            tickvals=list(sentiment_scores.values()),
+            ticktext=list(sentiment_scores.keys()),
+            range=[-5.5, 5.5]
+        ),
+        showlegend=False
+    )
+
+    return fig
+
+
+
+
+# # Initialize the database
+# create_tables()
+
+# # Add a new patient 
+# patient_id = 2  # Replace with the actual ID or fetch dynamically
+# name = "Hannah"
+# birthdate = "2000-06-01"
+# notes = "Social anxiety"
+# add_patient(patient_id, name, birthdate, notes)
+
+# # Process the session
+# session_id = "session_001"
+# process_session(audio_file, patient_id, session_id)
+
+
+
+
+# # Fetch session data for analysis
+# print("Fetching session data...")
+# session_data = fetch_session_data(patient_id, session_id)
+# print(f"Fetched {len(session_data)} entries from the database.")
+
+# # Separate patient and psychologist data
+# print("Separating patient and psychologist data...")
+# patient_data = [entry for entry in session_data if entry['speaker'] == 'patient']
+# psychologist_data = [entry for entry in session_data if entry['speaker'] == 'psychologist']
+# print(f"Patient data: {len(patient_data)} entries")
+# print(f"Psychologist data: {len(psychologist_data)} entries")
+
+# # Define thresholds for drastic emotion change
+# patient_threshold = 3
+
+# # Detect drastic changes for patient
+# print("\nDetecting drastic changes for patient...")
+# patient_drastic_changes = detect_drastic_changes(patient_data, patient_threshold)
+
+# print("\nAnalyzing each drastic change for the patient...")
+# for change in patient_drastic_changes:
+#     id1, id2, change_value = change
+#     print(f"\nAnalyzing change between ids {id1} and {id2} with change value {change_value}")
+    
+#     context = [entry for entry in session_data if id1 - 3 <= entry['id'] <= id2 + 3]
+#     sentence_1 = next(item['sentence'] for item in patient_data if item['id'] == id1)
+#     sentence_2 = next(item['sentence'] for item in patient_data if item['id'] == id2)
+#     emotion_1 = next(item['sentiment'] for item in patient_data if item['id'] == id1)
+#     emotion_2 = next(item['sentiment'] for item in patient_data if item['id'] == id2)
+
+#     print(f"Context size: {len(context)} sentences")
+#     print(f"Sentence 1: {sentence_1[:50]}...")
+#     print(f"Sentence 2: {sentence_2[:50]}...")
+#     print(f"Emotion 1: {emotion_1}")
+#     print(f"Emotion 2: {emotion_2}")
+
+#     topic = identify_topic_of_change([item['sentence'] for item in context], sentence_1, sentence_2, change_value, emotion_1, emotion_2, "patient")
+#     print(f"Identified Topic for Patient's Drastic Change: {topic}")
+
+# print("\nDrastic change analysis complete.")
+
+# # Example of embedding-based search
+# print("\nPerforming embedding-based search...")
+# query = "studies"
+# results = search_similar_sentences(patient_id, query)
+
+# # Display the top 5 results
+# print(f"\nTop 5 results for query '{query}':")
+# for result in results[:5]:
+#     print(f"Sentence: {result[1][:50]}... (Similarity: {result[2]:.4f})")

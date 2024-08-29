@@ -20,21 +20,40 @@ def generate_query_embedding(query):
     embedding = generate_embedding(query)
     return embedding
 
-def search_similar_sentences(patient_id, query):
+def search_similar_sentences(patient_id, query, sessions_to_search):
+    """
+    Searches for similar sentences based on a query and selected sessions.
+
+    Parameters:
+    - patient_id: The ID of the patient
+    - query: The search query
+    - sessions_to_search: A list of session IDs to search within
+
+    Returns:
+    - List of similar sentences with their session ID, sentence number, speaker, and sentence text.
+    """
     query_embedding = generate_query_embedding(query)
     patient_embeddings = fetch_patient_embeddings(patient_id)
     
     similarities = []
     query_embedding = np.array(query_embedding).reshape(1, -1)
 
-    for sentence_id, sentence, embedding in patient_embeddings:
-        words = sentence.split()
-        if len(words) > 4:
-            embedding = np.array(embedding).reshape(1, -1)
-            similarity_score = cosine_similarity(query_embedding, embedding)[0][0]
-            similarities.append((sentence_id, sentence, similarity_score))
+    for session_id, sentence_id, sentence, speaker, embedding in patient_embeddings:
+        if session_id in sessions_to_search or 'All sessions' in sessions_to_search:
+            words = sentence.split()
+            if len(words) > 4:
+                embedding = np.array(embedding).reshape(1, -1)
+                similarity_score = cosine_similarity(query_embedding, embedding)[0][0]
+                similarities.append({
+                    'session_id': session_id,
+                    'sentence_number': sentence_id,
+                    'sentence': sentence,
+                    'speaker': speaker,
+                    'similarity_score': similarity_score
+                })
 
-    similarities.sort(key=lambda x: x[2], reverse=True)
+    # Sort by similarity score in descending order
+    similarities.sort(key=lambda x: x['similarity_score'], reverse=True)
     return similarities
 
 
