@@ -2,10 +2,11 @@ import assemblyai as aai
 from openai import OpenAI
 import json
 
-from embedding_handler import generate_session_embeddings, generate_embedding, generate_query_embedding, search_similar_sentences
+from embedding_handler import generate_embedding, generate_query_embedding, search_similar_sentences
 from sklearn.metrics.pairwise import cosine_similarity
 
-from database_handler import create_tables, store_embeddings, add_patient, fetch_patient_embeddings
+from database_handler import create_tables, insert_session_data, update_session_embedding, add_patient, fetch_patient_embeddings, fetch_session_data
+
 
 aai.settings.api_key = "7a43eb14db35446586c8e9938f2b947c"
 
@@ -14,82 +15,37 @@ client = OpenAI(
 )
 openai_api_model = "gpt-3.5-turbo"
 
-
 # audio_file = "/Users/noyaarav/Desktop/Final-Project-From-Idea-To-Reality/audio_files/13mins_session_depression.mp4"
 audio_file = "/Users/noyaarav/Desktop/Final-Project-From-Idea-To-Reality/audio_files/session2_social_anxiety_Hannah.mp4"
 
 
 # Sentiment score dictionaries
 patient_sentiment_scores = {
-    "Despair": -5,
-    "Anger": -4,
-    "Anxiety": -3,
-    "Sadness": -2,
-    "Discomfort": -1,
-    "Natural": 0,
-    "Contentment": 1,
-    "Hopefulness": 2,
-    "Happiness": 3,
-    "Excitement": 4,
-    "Euphoria": 5
+    "Despair": -5, "Anger": -4, "Anxiety": -3, "Sadness": -2, "Discomfort": -1,
+    "Natural": 0, "Contentment": 1, "Hopefulness": 2, "Happiness": 3, "Excitement": 4, "Euphoria": 5
 }
 
 psychologist_sentiment_scores = {
-    "Overwhelm": -5,
-    "Helplessness": -4,
-    "Sadness": -3,
-    "Frustration": -2,
-    "Concern": -1,
-    "Natural": 0,
-    "Contentment": 1,
-    "Encouragement": 2,
-    "Empathy": 3,
-    "Optimism": 4,
-    "Fulfillment": 5
+    "Overwhelm": -5, "Helplessness": -4, "Sadness": -3, "Frustration": -2, "Concern": -1,
+    "Natural": 0, "Contentment": 1, "Encouragement": 2, "Empathy": 3, "Optimism": 4, "Fulfillment": 5
 }
 
-def get_sentiment_patient(text):
-
-  sentiments = [
-    "Euphoria", "Excitement", "Happiness", "Hopefulness", "Contentment", 
-    "Natural", "Discomfort", "Sadness", "Anxiety", "Anger", "Despair"
-    ]
-  
-  response = client.chat.completions.create(
-      model="gpt-3.5-turbo",
-      temperature=0, # Use a larger temperature value to generate more diverse results.
-     messages=[
-            {"role": "user", "content": f"""Given the following sentence that was said by a patient during a therapy session:"
-             "{text}"
-             Which of the following sentiments best describes it? Choose one of the following: {", ".join(sentiments)}.
-             return only one word - the correct sentiment from the list above."""}
-        ],
-  )
-  sentiment = response.choices[0].message.content
-  return sentiment
-
-def get_sentiment_psychologist(text):
-
-    sentiments = [
-    "Fulfillment" , "Optimism" , "Empathy", "Encouragement", "Contentment", "Natural", 
-    "Concern", "Frustration", "Sadness", "Helplessness", "Overwhelm"
-    ]
-
+def get_sentiment(text, is_patient):
+    sentiments = list(patient_sentiment_scores.keys()) if is_patient else list(psychologist_sentiment_scores.keys())
+    
     response = client.chat.completions.create(
-      model="gpt-3.5-turbo",
-      temperature=0, # Use a larger temperature value to generate more diverse results.
-     messages=[
-            {"role": "user", "content": f"""Given the following sentence that was said by a psychologist during a therapy session:
+        model="gpt-3.5-turbo",
+        temperature=0,
+        messages=[
+            {"role": "user", "content": f"""Given the following sentence from a {'patient' if is_patient else 'psychologist'} during a therapy session:
              "{text}"
              Which of the following sentiments best describes it? Choose one of the following: {", ".join(sentiments)}.
-             return only one word - the correct sentiment from the list above."""}
+             Return only one word - the correct sentiment from the list above."""}
         ],
-  )
+    )
+    return response.choices[0].message.content.strip()
 
-    sentiment = response.choices[0].message.content
-    return sentiment
-  
-  
+    
 def determine_speaker_roles(transcript):
     # Prepare a sample of the conversation
     sample = "\n".join([f"Speaker {u.speaker}: {u.text}" for u in transcript.utterances[:15]])
@@ -112,61 +68,44 @@ def determine_speaker_roles(transcript):
     roles = json.loads(result)
     return roles
 
-
-def detect_drastic_changes(data, threshold):
-    """
-    Detects drastic changes in sentiment scores.
-
-    Parameters:
-    - data: List of dictionaries containing 'sentence', 'sentiment', 'score', and 'index'.
-    - threshold: The minimum change in sentiment score required to consider a change as drastic.
-
-    Returns:
-    - drastic_changes: A list of tuples containing (index_start, index_end, change).
-      - index_start: The index of the starting sentence.
-      - index_end: The index of the ending sentence.
-      - change: The actual change in sentiment score (can be positive or negative).
-    """
+def detect_drastic_changes(session_data, threshold):
+    print(f"Starting drastic change detection with threshold: {threshold}")
+    print(f"Number of entries in session_data: {len(session_data)}")
+    
     drastic_changes = []
-    used_indices = set()  # To track used indices and avoid repetition
-    
-    # Iterate over the data to find drastic changes
-    for i in range(1, len(data)):
-        # Calculate the number of words in the current and previous sentences
-        words_current = len(data[i]['sentence'].split())
-        words_previous = len(data[i - 1]['sentence'].split())
-        
-        # Check if both sentence has more than 5 words and have not been used in a previous drastic change
-        if (
-            words_current > 5 and words_previous > 5 and
-            data[i]['index'] not in used_indices and 
-            data[i - 1]['index'] not in used_indices
-        ):
-            score_change = data[i]['score'] - data[i - 1]['score']
-            
-            # Check if the absolute change is greater than or equal to the threshold
-            if abs(score_change) >= threshold:
-                # Append the change details including the actual score change
-                drastic_changes.append((data[i - 1]['index'], data[i]['index'], score_change))
-                
-                # Mark these indices as used
-                used_indices.add(data[i]['index'])
-                used_indices.add(data[i - 1]['index'])
+    used_ids = set()
 
-                # Print debugging information
-                print(f"Drastic change detected between indices {data[i - 1]['index']} and {data[i]['index']}:")
-                print(f"Sentence {data[i - 1]['index']}: {data[i - 1]['sentence']}")
-                print(f"Sentence {data[i]['index']}: {data[i]['sentence']}")
-                print(f"Sentiment change: {score_change}")
-                print("---")
-    
-    # Sort by absolute score change in descending order, then by starting index in ascending order
-    drastic_changes.sort(key=lambda x: (-abs(x[2]), x[0]))
-    
-    # Return at most 7 changes
+    for i in range(1, len(session_data)):
+        current = session_data[i]
+        previous = session_data[i-1]
+        
+        words_current = len(current['sentence'].split())
+        words_previous = len(previous['sentence'].split())
+
+        print(f"\nComparing entries {i-1} and {i}:")
+        print(f"  Previous: {previous['sentence'][:50]}... (Words: {words_previous}, Score: {previous['sentiment_score']})")
+        print(f"  Current:  {current['sentence'][:50]}... (Words: {words_current}, Score: {current['sentiment_score']})")
+
+        if words_current > 5 and words_previous > 5 and current['id'] not in used_ids and previous['id'] not in used_ids:
+            score_change = current['sentiment_score'] - previous['sentiment_score']
+            print(f"  Score change: {score_change}")
+
+            if abs(score_change) >= threshold:
+                drastic_changes.append((previous['id'], current['id'], score_change))
+                used_ids.add(current['id'])
+                used_ids.add(previous['id'])
+                print(f"  Drastic change detected!")
+            else:
+                print(f"  Change not significant enough. Threshold: {threshold}, Actual change: {abs(score_change)}")
+        else:
+            if words_current <= 5 or words_previous <= 5:
+                print("  Skipped due to insufficient word count")
+            elif current['id'] in used_ids or previous['id'] in used_ids:
+                print("  Skipped due to previously used IDs")
+
+    print(f"\nTotal drastic changes detected: {len(drastic_changes)}")
     return drastic_changes[:7]
   
-
 def get_context_for_change(transcript, index1, index2):
   # Function to get a 7-sentence context around the change
     
@@ -182,7 +121,6 @@ def get_context_for_change(transcript, index1, index2):
     context.append(transcript.utterances[min(len(transcript.utterances) - 1, index2 + 1)].text)  # 2 sentences after
     
     return context
-
 
 def identify_topic_of_change(sentences, sentence_1, sentence_2, change, emotion_1, emotion_2, speaker):
     """
@@ -246,29 +184,38 @@ If there is no actual drastic change in emotion in the provided context and the 
     return topic
 
 
+def process_session(audio_file, patient_id, session_id):
+    config = aai.TranscriptionConfig(speaker_labels=True, speakers_expected=2)
+    transcript = aai.Transcriber().transcribe(audio_file, config)
 
-def search_sentences(patient_id, query):
-    # Generate embedding for the query
-    query_embedding = generate_query_embedding(query)
+    speaker_roles = determine_speaker_roles(transcript)
+    psychologist_speaker = speaker_roles['psychologist']
+    patient_speaker = speaker_roles['patient']
 
-    # Fetch all embeddings for the specific patient from the database
-    patient_embeddings = fetch_patient_embeddings(patient_id)
+    for i, utterance in enumerate(transcript.utterances):
+        is_patient = utterance.speaker == patient_speaker
+        speaker = 'patient' if is_patient else 'psychologist'
+        words = utterance.text.split()
 
-    # Find the most similar sentences
-    similar_sentences = search_similar_sentences(query_embedding, patient_embeddings)
+        if len(words) > 4:
+            sentiment = get_sentiment(utterance.text, is_patient)
+            score = patient_sentiment_scores.get(sentiment, 0) if is_patient else psychologist_sentiment_scores.get(sentiment, 0)
+        else:
+            sentiment = None
+            score = 0
 
-    return similar_sentences
+        # Insert session data into the database
+        insert_session_data(patient_id, session_id, utterance.text, speaker, sentiment, score)
 
+        print(f"{speaker.capitalize()}: {utterance.text}")
+        print(f"Sentiment: {sentiment}, Score: {score}")
 
-# Lists to store the data
-patient_data = []
-psychologist_data = []
+        # Generate and update embedding
+        embedding = generate_embedding(utterance.text)
+        update_session_embedding(session_id, utterance.text, embedding)
 
+    print("Session processing and data storage completed successfully.")
 
-config = aai.TranscriptionConfig(
-  speaker_labels=True,
-  speakers_expected=2
-)
 
 # Initialize the database
 create_tables()
@@ -280,108 +227,57 @@ birthdate = "2000-06-01"
 notes = "Social anxiety"
 add_patient(patient_id, name, birthdate, notes)
 
-# Transcript and sentiment analysis
-transcript = aai.Transcriber().transcribe(audio_file, config)
+# Process the session
+session_id = "session_001"
+process_session(audio_file, patient_id, session_id)
 
-# Determine speaker roles
-speaker_roles = determine_speaker_roles(transcript)
-psychologist_speaker = speaker_roles['psychologist']
-patient_speaker = speaker_roles['patient']
+# Fetch session data for analysis
+print("Fetching session data...")
+session_data = fetch_session_data(patient_id, session_id)
+print(f"Fetched {len(session_data)} entries from the database.")
 
-# Check if speaker roles determined successfully
-# print(f"Determined roles: Psychologist is Speaker {psychologist_speaker}, Patient is Speaker {patient_speaker}")
-
-session_id = "session_001"  # Example session ID
-
-for i, utterance in enumerate(transcript.utterances):
-    words = utterance.text.split()
-    if utterance.speaker == patient_speaker:
-        if len(words) > 4:
-            sentiment = get_sentiment_patient(utterance.text)
-            score = patient_sentiment_scores.get(sentiment, 0)
-        else:
-            sentiment = None
-            score = 0
-        patient_data.append({"sentence": utterance.text, "sentiment": sentiment, "score": score, "index": i + 1})
-    elif utterance.speaker == psychologist_speaker:
-        if len(words) > 4:
-            sentiment = get_sentiment_psychologist(utterance.text)
-            score = psychologist_sentiment_scores.get(sentiment, 0)
-        else:
-            sentiment = None
-            score = 0
-        psychologist_data.append({"sentence": utterance.text, "sentiment": sentiment, "score": score, "index": i + 1})
-    
-    print(f"{'Psychologist' if utterance.speaker == psychologist_speaker else 'Patient'} : {utterance.text}")
-    print(f"Sentiment: {sentiment}")
-    
-  
-# Generate and store embeddings
-try:
-    session_embeddings = generate_session_embeddings(transcript, patient_speaker, patient_data, psychologist_data)
-    print("Embeddings generated successfully.")
-    store_embeddings(patient_id, session_id=session_id, session_embeddings=session_embeddings)
-    print("Embeddings stored successfully in the database.")
-except Exception as e:
-    print(f"An error occurred during embedding or database operations: {e}")
-
-
+# Separate patient and psychologist data
+print("Separating patient and psychologist data...")
+patient_data = [entry for entry in session_data if entry['speaker'] == 'patient']
+psychologist_data = [entry for entry in session_data if entry['speaker'] == 'psychologist']
+print(f"Patient data: {len(patient_data)} entries")
+print(f"Psychologist data: {len(psychologist_data)} entries")
 
 # Define thresholds for drastic emotion change
-patient_threshold = 4
-psychologist_threshold = 7
+patient_threshold = 3
 
 # Detect drastic changes for patient
+print("\nDetecting drastic changes for patient...")
 patient_drastic_changes = detect_drastic_changes(patient_data, patient_threshold)
 
-# Detect drastic changes for psychologist
-# psychologist_drastic_changes = detect_drastic_changes(psychologist_data, psychologist_threshold)
-
-# Example output
-# print("Drastic changes for patient:", patient_drastic_changes)
-# print("Drastic changes for psychologist:", psychologist_drastic_changes)
-
-# Analyze each drastic change for the patient
+print("\nAnalyzing each drastic change for the patient...")
 for change in patient_drastic_changes:
-    index1, index2, change_value = change
-    # Get emotions and sentences from patient data
-    emotion_1 = next(item['sentiment'] for item in patient_data if item['index'] == index1)
-    emotion_2 = next(item['sentiment'] for item in patient_data if item['index'] == index2)
-    sentence_1 = next(item['sentence'] for item in patient_data if item['index'] == index1)
-    sentence_2 = next(item['sentence'] for item in patient_data if item['index'] == index2)
+    id1, id2, change_value = change
+    print(f"\nAnalyzing change between ids {id1} and {id2} with change value {change_value}")
     
-    # Get 7-sentence context
-    context = get_context_for_change(transcript, index1, index2)
-    
-    print("Drastic change for patient:", change)
-    
-    # Identify the topic causing the change
-    topic = identify_topic_of_change(context, sentence_1, sentence_2, change_value, emotion_1, emotion_2, "patient")
+    context = [entry for entry in session_data if id1 - 3 <= entry['id'] <= id2 + 3]
+    sentence_1 = next(item['sentence'] for item in patient_data if item['id'] == id1)
+    sentence_2 = next(item['sentence'] for item in patient_data if item['id'] == id2)
+    emotion_1 = next(item['sentiment'] for item in patient_data if item['id'] == id1)
+    emotion_2 = next(item['sentiment'] for item in patient_data if item['id'] == id2)
+
+    print(f"Context size: {len(context)} sentences")
+    print(f"Sentence 1: {sentence_1[:50]}...")
+    print(f"Sentence 2: {sentence_2[:50]}...")
+    print(f"Emotion 1: {emotion_1}")
+    print(f"Emotion 2: {emotion_2}")
+
+    topic = identify_topic_of_change([item['sentence'] for item in context], sentence_1, sentence_2, change_value, emotion_1, emotion_2, "patient")
     print(f"Identified Topic for Patient's Drastic Change: {topic}")
 
-# # Analyze each drastic change for the psychologist
-# for change in psychologist_drastic_changes:
-#     index1, index2, change_value = change
-#     # Get emotions and sentences from psychologist data
-#     emotion_1 = next(item['sentiment'] for item in psychologist_data if item['index'] == index1)
-#     emotion_2 = next(item['sentiment'] for item in psychologist_data if item['index'] == index2)
-#     sentence_1 = next(item['sentence'] for item in psychologist_data if item['index'] == index1)
-#     sentence_2 = next(item['sentence'] for item in psychologist_data if item['index'] == index2)
-    
-#     # Get 7-sentence context
-#     context = get_context_for_change(transcript, index1, index2)
-    
-#     # Identify the topic causing the change
-#     topic = identify_topic_of_change(context, sentence_1, sentence_2, change_value, emotion_1, emotion_2, "psychologist")
-#     print(f"Identified Topic for Psychologist's Drastic Change: {topic}")
+print("\nDrastic change analysis complete.")
 
+# Example of embedding-based search
+print("\nPerforming embedding-based search...")
+query = "studies"
+results = search_similar_sentences(patient_id, query)
 
-# Example usage for embedding based search
-# patient_id = 1  # Example patient ID
-# query = "studies"
-# results = search_sentences(patient_id, query)
-
-# # Display the top 5 results
-# for result in results[:5]:
-#     print(f"Sentence: {result[1]} (Similarity: {result[2]:.4f})")
-
+# Display the top 5 results
+print(f"\nTop 5 results for query '{query}':")
+for result in results[:5]:
+    print(f"Sentence: {result[1][:50]}... (Similarity: {result[2]:.4f})")
