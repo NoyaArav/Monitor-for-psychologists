@@ -199,11 +199,29 @@ def main():
                 search_results = search_similar_sentences(selected_patient['patient_id'], search_query, selected_session_ids)
 
                 if search_results:
-                    st.write("Search Results:")
+                    st.markdown("<span style='font-size:20px; font-weight:bold; text-decoration:underline;'>Search Results:</span>", unsafe_allow_html=True)
                     for result in search_results:
-                        st.write(f"Session {result['session_id']} | Sentence {result['sentence_number']} | {result['speaker']}: {result['sentence']}")
+                        # Determine the speaker and sentence color based on the speaker
+                        if result['speaker'].lower() == 'patient':
+                            speaker_name = patient_info['name']
+                            sentence_color = '#a455e0'
+                        elif result['speaker'].lower() == 'psychologist':
+                            speaker_name = 'you'
+                            sentence_color = '#1295e6'
+                        else:
+                            speaker_name = result['speaker']
+                            sentence_color = 'black'  # Default color if speaker is neither patient nor psychologist
+                        
+                        # Create a formatted string for the session, sentence number, and speaker
+                        session_info = f"**<span style='font-size:18px;'>Session {result['session_id']} | Sentence {result['sentence_number']} | {speaker_name}:</span>**"
+
+                        
+                        # Display the session info in bold and larger font size, and the sentence in the desired color
+                        st.markdown(session_info, unsafe_allow_html=True)
+                        st.markdown(f"<span style='font-size:16px; color:{sentence_color};'>{result['sentence']}</span>", unsafe_allow_html=True)
                 else:
                     st.write("No results found.")
+
 
         elif st.session_state.current_page == "Transcripts":
             st.title(f"Session Transcript: {selected_patient['name']}")
@@ -222,13 +240,19 @@ def main():
 
                 # Display the session transcript line by line with color coding
                 for i, entry in enumerate(session['session_data'], start=1):
-                    speaker = entry['speaker'].capitalize()
-                    sentence = entry['sentence']
-                    if speaker == "Patient":
-                        st.markdown(f"<span style='color: #1295e6;'><strong>{i}. {speaker}:</strong> {sentence}</span>", unsafe_allow_html=True)
+                    # Check if the speaker is the patient or psychologist
+                    if entry['speaker'].lower() == "patient":
+                        speaker_display = selected_patient['name']  # Use patient's name
+                        sentence_color = "#a455e0"  # Purple color for patient's sentences
                     else:  # Psychologist
-                        st.markdown(f"<span style='color: #1263e6;'><strong>{i}. {speaker}:</strong> {sentence}</span>", unsafe_allow_html=True)
+                        speaker_display = "you"
+                        sentence_color = "#1263e6"  # Blue color for psychologist's sentences
 
+                    # Display each line with the speaker's name and the sentence in the appropriate color
+                    st.markdown(
+                        f"<span style='color: {sentence_color};'><strong>{i}. {speaker_display}:</strong> {entry['sentence']}</span>",
+                        unsafe_allow_html=True
+                    )
                 # Display patient's sentiment graph
                 st.subheader("Patient's Sentiment Analysis")
                 patient_data = [entry for entry in session['session_data'] if entry['speaker'].lower() == 'patient']
