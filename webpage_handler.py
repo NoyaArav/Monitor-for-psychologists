@@ -7,7 +7,7 @@ from streamlit_option_menu import option_menu
 # Placeholder for functions to handle database interactions and data processing
 from database_handler import get_patient_info, get_all_patients, add_patient, initialize_database
 from embedding_handler import search_similar_sentences
-from Project import process_audio_file, generate_sentiment_graph, detect_drastic_changes, identify_topic_of_change
+from Project import process_audio_file, generate_sentiment_graph, detect_drastic_changes, identify_topic_of_change, identify_topics_to_revisit
 
 # Sentiment score dictionaries
 patient_sentiment_scores = {
@@ -166,6 +166,17 @@ def main():
             # Display number of sessions
             num_sessions = len(patient_info['sessions'])
             st.markdown(f"**Number of Sessions:** {num_sessions}")
+            
+            # Fetch topics to revisit using the identify_topics_to_revisit function
+            topics_to_revisit = identify_topics_to_revisit(selected_patient['patient_id'])
+
+            # Display topics to revisit under a clear and descriptive title
+            st.subheader("Potential Topics to Revisit")
+            if topics_to_revisit:
+                for topic in topics_to_revisit:
+                    st.write(f"- {topic}")
+            else:
+                st.write("No specific topics identified for revisiting at this time.")
 
         elif st.session_state.current_page == "Search":
             st.title(f"Search: {selected_patient['name']}")

@@ -285,7 +285,92 @@ def detect_and_store_topics(patient_id, session_id, session_data):
             print(f"Inserted topic: {topic}")
     else:
         print("No drastic emotional changes detected in this session.")
+        
+        
+def identify_topics_to_revisit(patient_id):
+    """
+    Identify topics that caused drastic emotional changes in the session before the last 
+    but were not discussed in the last session for a specific patient, using ChatGPT 
+    to account for similar meanings with different phrasings.
 
+    Args:
+    - patient_id (int): The ID of the patient.
+
+    Returns:
+    - List[str]: Topics to revisit if more than one session exists; otherwise, an empty list.
+    """
+    # Establish a connection to the database
+    conn = sqlite3.connect('patient_sessions.db')
+    cursor = conn.cursor()
+
+    # Fetch the last two session IDs for the patient
+    cursor.execute("SELECT DISTINCT session_id FROM sessions WHERE patient_id = ? ORDER BY session_id DESC LIMIT 2", (patient_id,))
+    session_ids = cursor.fetchall()
+
+    # Check if there are at least two sessions
+    if len(session_ids) < 2:
+        conn.close()
+        return []
+
+    last_session_id, prev_session_id = session_ids[0][0], session_ids[1][0]
+
+    # Fetch topics for the last session
+    cursor.execute("SELECT topic FROM topics WHERE patient_id = ? AND session_id = ?", (patient_id, last_session_id))
+    last_session_topics = [row[0] for row in cursor.fetchall()]
+
+    # Fetch topics for the session before the last
+    cursor.execute("SELECT topic FROM topics WHERE patient_id = ? AND session_id = ?", (patient_id, prev_session_id))
+    prev_session_topics = [row[0] for row in cursor.fetchall()]
+
+    conn.close()
+
+    # Use ChatGPT to determine which topics from the previous session should be revisited
+    topics_to_revisit = get_topics_to_revisit(prev_session_topics, last_session_topics)
+
+    return topics_to_revisit
+  
+
+def get_topics_to_revisit(prev_session_topics, last_session_topics):
+    """
+    Use ChatGPT to determine which topics from the previous session should be revisited,
+    accounting for different phrasings and similar meanings.
+
+    Args:
+    - prev_session_topics (List[str]): Topics from the session before the last.
+    - last_session_topics (List[str]): Topics from the last session.
+
+    Returns:
+    - List[str]: Topics to revisit.
+    """
+    # Combine the topics into a single prompt for ChatGPT to analyze
+    prompt = f"""
+    Compare the following two lists of topics. Identify which topics from the first list were not discussed in the second list, considering that topics may be phrased differently but could have the same or similar meanings.
+
+    Topics from the session before the last: {prev_session_topics}
+    
+    Topics from the last session: {last_session_topics}
+    
+    Provide a list of topics from the first list that are not present in the second list, taking into account synonyms or different phrasings.
+    Please includee in your response only the topics, without further information. thank you.
+    """
+
+    # Send the prompt to ChatGPT
+    response = client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        temperature=0,  # Lower temperature for more deterministic output
+        messages=[
+            {"role": "system", "content": "You are an expert assistant in analyzing conversational topics for therapeutic sessions."},
+            {"role": "user", "content": prompt}
+        ],
+    )
+
+    
+    output = response.choices[0].message.content.strip()
+
+    # Remove any empty strings or unnecessary spaces from the list
+    topics_to_revisit = output.split('\n')  # Split based on newline to separate topics
+
+    return topics_to_revisit
 
     
 def process_audio_file(patient_id, audio_file):
