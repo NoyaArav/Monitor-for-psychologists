@@ -31,6 +31,38 @@ def create_tables():
     conn.commit()
     conn.close()
 
+def initialize_database():
+    conn = sqlite3.connect('patient_sessions.db')
+    cursor = conn.cursor()
+
+    # Create patients table
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS patients (
+        patient_id INTEGER PRIMARY KEY,
+        name TEXT,
+        birthdate TEXT,
+        notes TEXT
+    )
+    ''')
+
+    # Create sessions table
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS sessions (
+        id INTEGER PRIMARY KEY,
+        patient_id INTEGER,
+        session_id TEXT,
+        sentence TEXT,
+        speaker TEXT,
+        embedding BLOB,
+        sentiment TEXT,
+        sentiment_score REAL,
+        FOREIGN KEY(patient_id) REFERENCES patients(patient_id)
+    )
+    ''')
+
+    conn.commit()
+    conn.close()
+
 def add_patient(patient_id, name, birthdate, notes):
     conn = sqlite3.connect('patient_sessions.db')
     cursor = conn.cursor()

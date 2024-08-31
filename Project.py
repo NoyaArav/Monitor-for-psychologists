@@ -1,14 +1,17 @@
+import os
+import tempfile
+from pathlib import Path
 import assemblyai as aai
 from openai import OpenAI
 import json
-import os
 import sqlite3
 from sklearn.metrics.pairwise import cosine_similarity
 import plotly.graph_objs as go
+from plotly.subplots import make_subplots
+import textwrap
 
 from embedding_handler import generate_embedding, generate_query_embedding, search_similar_sentences
 from database_handler import create_tables, insert_session_data, update_session_embedding, add_patient, fetch_patient_embeddings, fetch_session_data
-
 
 aai.settings.api_key = "7a43eb14db35446586c8e9938f2b947c"
 
@@ -33,19 +36,32 @@ psychologist_sentiment_scores = {
 }
 
 def get_sentiment(text, is_patient):
-    sentiments = list(patient_sentiment_scores.keys()) if is_patient else list(psychologist_sentiment_scores.keys())
+    prompt = f"""
+    Analyze the sentiment of the following text. Respond with:
+    1. A single word (not the word positive or negative ) or short phrase that best describes the emotion.
+    2. A number between -10 and 10 representing the intensity and polarity of the emotion, where:
+       - -10 represents the most extreme negative emotion (e.g., severe depression, intense hatred)
+       - 0 represents a neutral state
+       - 10 represents the most extreme positive emotion (e.g., ecstatic joy, intense love)
+    Provide your response in the format: "Sentiment: [word/phrase], Score: [number]"
     
+    Text: "{text}"
+    """
+
     response = client.chat.completions.create(
         model="gpt-3.5-turbo",
-        temperature=0,
         messages=[
-            {"role": "user", "content": f"""Given the following sentence from a {'patient' if is_patient else 'psychologist'} during a therapy session:
-             "{text}"
-             Which of the following sentiments best describes it? Choose one of the following: {", ".join(sentiments)}.
-             Return only one word - the correct sentiment from the list above."""}
-        ],
+            {"role": "system", "content": "You are a skilled psychologist with expertise in emotion analysis."},
+            {"role": "user", "content": prompt}
+        ]
     )
-    return response.choices[0].message.content.strip()
+
+    result = response.choices[0].message.content.strip()
+    sentiment, score = result.split(', ')
+    sentiment = sentiment.split(': ')[1]
+    score = float(score.split(': ')[1])
+
+    return sentiment, score
 
     
 def determine_speaker_roles(transcript):
@@ -200,8 +216,7 @@ def process_session(audio_file, patient_id, session_id):
         words = utterance.text.split()
 
         if len(words) > 4:
-            sentiment = get_sentiment(utterance.text, is_patient)
-            score = patient_sentiment_scores.get(sentiment, 0) if is_patient else psychologist_sentiment_scores.get(sentiment, 0)
+            sentiment, score = get_sentiment(utterance.text, is_patient)  
         else:
             sentiment = None
             score = 0
@@ -229,19 +244,28 @@ def process_audio_file(patient_id, audio_file):
     - patient_id: ID of the patient associated with the session
     - audio_file: Uploaded audio file object
     """
-    # Save the uploaded file temporarily
-    file_path = f"temp/{audio_file.name}"
-    with open(file_path, "wb") as f:
-        f.write(audio_file.getbuffer())
+    # Create a temporary directory if it doesn't exist
+    temp_dir = Path("temp")
+    temp_dir.mkdir(exist_ok=True)
 
-    # Generate a new session ID
-    session_id = generate_new_session_id(patient_id)
+    # Generate a unique filename
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=Path(audio_file.name).suffix, dir=temp_dir)
+    temp_file_path = temp_file.name
 
-    # Call the process_session function to handle transcription, sentiment, and storage
-    process_session(file_path, patient_id, session_id)
+    try:
+        # Save the uploaded file temporarily
+        with open(temp_file_path, "wb") as f:
+            f.write(audio_file.getbuffer())
 
-    # Clean up the temporary file
-    os.remove(file_path)
+        # Generate a new session ID
+        session_id = generate_new_session_id(patient_id)
+
+        # Call the process_session function to handle transcription, sentiment, and storage
+        process_session(temp_file_path, patient_id, session_id)
+
+    finally:
+        # Clean up the temporary file
+        os.unlink(temp_file_path)
 
 def generate_new_session_id(patient_id):
     """
@@ -254,10 +278,10 @@ def generate_new_session_id(patient_id):
     Returns:
     - A new session ID (integer)
     """
-    conn = sqlite3.connect('patient_sessions.db')  # Replace with your actual database file
+    conn = sqlite3.connect('patient_sessions.db')  
     cursor = conn.cursor()
 
-    cursor.execute("SELECT MAX(session_id) FROM sessions WHERE patient_id = ?", (patient_id,))
+    cursor.execute("SELECT MAX(CAST(session_id AS INTEGER)) FROM sessions WHERE patient_id = ?", (patient_id,))
     max_session_id = cursor.fetchone()[0]
 
     conn.close()
@@ -266,12 +290,12 @@ def generate_new_session_id(patient_id):
     if max_session_id is None:
         return 1
     else:
-        return max_session_id + 1
+        return int(max_session_id) + 1
       
       
       
 
-def generate_sentiment_graph(session, title, sentiment_scores):
+def generate_sentiment_graph(session_data, title, sentiment_scores , speaker):
     """
     Generates a sentiment graph for a given session.
     
@@ -281,107 +305,93 @@ def generate_sentiment_graph(session, title, sentiment_scores):
     Returns:
     - A Plotly Figure object representing the sentiment graph.
     """
-    fig = go.Figure()
+   # Filter for specific speaker sentences
+    speaker_data = [row for row in session_data if row['speaker'].lower() == speaker.lower() and row['sentiment'] is not None]
 
-    # Extract sentence indices, sentiment scores, and text data
-    x = [i + 1 for i in range(len(session))]
-    y = [row['sentiment_score'] for row in session]
-    text = [f"Sentence: {row['sentence']}<br>Sentiment: {row['sentiment']}" for row in session]
-    color = ['green' if score > 0 else 'red' for score in y]
+    # Extract data, using the 'id' as the sentence number
+    x = [row['id'] for row in speaker_data]
+    y = [row['sentiment_score'] for row in speaker_data]
+    text = [row['sentence'] for row in speaker_data]
+    sentiments = [row['sentiment'] for row in speaker_data]
 
-    # Add scatter plot for sentiment scores
-    fig.add_trace(go.Scatter(
-        x=x,
-        y=y,
-        mode='markers',
-        marker=dict(color=color),
-        text=text,
-        hoverinfo='text'
-    ))
+    # Create a wider figure
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
 
-    # Update graph layout
+    # Function to wrap text
+    def wrap_text(text, width=50):
+        return '<br>'.join(textwrap.wrap(text, width=width))
+
+    # Add line and scatter plot for sentiment scores
+    fig.add_trace(
+        go.Scatter(
+            x=x,
+            y=y,
+            mode='lines+markers',
+            line=dict(color='rgba(0,100,80,0.5)', width=2),
+            marker=dict(
+                color=y,
+                colorscale='RdYlGn',
+                cmin=-10,
+                cmax=10,
+                size=10,
+                colorbar=dict(
+                    title="",
+                    thickness=15,
+                    len=1.05,  
+                    yanchor="middle",
+                    y=0.5,
+                    x=-0.07,
+                    tickvals=[-10, -5, 0, 5, 10],
+                    ticktext=["", "", "", "", ""]
+                )
+            ),
+            text=[f"<b>Sentiment:</b> {sentiment}<br><b>Score:</b> {int(score)}<br><b>Sentence:</b> {wrap_text(sentence)}" 
+                  for sentiment, score, num, sentence in zip(sentiments, y, x, text)],
+            hoverinfo='text',
+            hovertemplate='%{text}<extra></extra>',
+        )
+    )
+
+    # Update layout
     fig.update_layout(
         title=title,
         xaxis_title="Sentence Number",
-        yaxis_title="Sentiment Score",
+        yaxis_title="",
         yaxis=dict(
-            tickmode='array',
-            tickvals=list(sentiment_scores.values()),
-            ticktext=list(sentiment_scores.keys()),
-            range=[-5.5, 5.5]
+            range=[-10.5, 10.5],
+            zeroline=False,
+            tickvals=[-10, -5, 0, 5, 10],
+            ticktext=["-10", "-5", "0", "5", "10"],
         ),
-        showlegend=False
+        xaxis=dict(
+            tickmode='array',
+            tickvals=x,  # Use actual sentence numbers for x-axis ticks
+            range=[min(x) - 1, max(x) + 1],
+        ),
+        showlegend=False,
+        width=1000,
+        height=600,
+        margin=dict(l=100, r=50, t=50, b=50),
+        hovermode="closest",
+        hoverlabel=dict(
+            bgcolor="white",
+            font_size=12,
+            font_family="Arial",
+            align="left"
+        )
+    )
+
+    # Add "Sentiment Score" label to the left of the scale
+    fig.add_annotation(
+        x=-0.09,
+        y=0.5,
+        xref="paper",
+        yref="paper",
+        text="Sentiment Score",
+        showarrow=False,
+        textangle=-90,
+        font=dict(size=12),
+        align="center",
     )
 
     return fig
-
-
-
-
-# # Initialize the database
-# create_tables()
-
-# # Add a new patient 
-# patient_id = 2  # Replace with the actual ID or fetch dynamically
-# name = "Hannah"
-# birthdate = "2000-06-01"
-# notes = "Social anxiety"
-# add_patient(patient_id, name, birthdate, notes)
-
-# # Process the session
-# session_id = "session_001"
-# process_session(audio_file, patient_id, session_id)
-
-
-
-
-# # Fetch session data for analysis
-# print("Fetching session data...")
-# session_data = fetch_session_data(patient_id, session_id)
-# print(f"Fetched {len(session_data)} entries from the database.")
-
-# # Separate patient and psychologist data
-# print("Separating patient and psychologist data...")
-# patient_data = [entry for entry in session_data if entry['speaker'] == 'patient']
-# psychologist_data = [entry for entry in session_data if entry['speaker'] == 'psychologist']
-# print(f"Patient data: {len(patient_data)} entries")
-# print(f"Psychologist data: {len(psychologist_data)} entries")
-
-# # Define thresholds for drastic emotion change
-# patient_threshold = 3
-
-# # Detect drastic changes for patient
-# print("\nDetecting drastic changes for patient...")
-# patient_drastic_changes = detect_drastic_changes(patient_data, patient_threshold)
-
-# print("\nAnalyzing each drastic change for the patient...")
-# for change in patient_drastic_changes:
-#     id1, id2, change_value = change
-#     print(f"\nAnalyzing change between ids {id1} and {id2} with change value {change_value}")
-    
-#     context = [entry for entry in session_data if id1 - 3 <= entry['id'] <= id2 + 3]
-#     sentence_1 = next(item['sentence'] for item in patient_data if item['id'] == id1)
-#     sentence_2 = next(item['sentence'] for item in patient_data if item['id'] == id2)
-#     emotion_1 = next(item['sentiment'] for item in patient_data if item['id'] == id1)
-#     emotion_2 = next(item['sentiment'] for item in patient_data if item['id'] == id2)
-
-#     print(f"Context size: {len(context)} sentences")
-#     print(f"Sentence 1: {sentence_1[:50]}...")
-#     print(f"Sentence 2: {sentence_2[:50]}...")
-#     print(f"Emotion 1: {emotion_1}")
-#     print(f"Emotion 2: {emotion_2}")
-
-#     topic = identify_topic_of_change([item['sentence'] for item in context], sentence_1, sentence_2, change_value, emotion_1, emotion_2, "patient")
-#     print(f"Identified Topic for Patient's Drastic Change: {topic}")
-
-# print("\nDrastic change analysis complete.")
-
-# # Example of embedding-based search
-# print("\nPerforming embedding-based search...")
-# query = "studies"
-# results = search_similar_sentences(patient_id, query)
-
-# # Display the top 5 results
-# print(f"\nTop 5 results for query '{query}':")
-# for result in results[:5]:
-#     print(f"Sentence: {result[1][:50]}... (Similarity: {result[2]:.4f})")
