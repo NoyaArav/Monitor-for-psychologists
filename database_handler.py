@@ -27,6 +27,18 @@ def create_tables():
         FOREIGN KEY(patient_id) REFERENCES patients(patient_id)
     )
     ''')
+    
+    # Create a single topics table with patient-specific entries
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS topics (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        patient_id INTEGER,
+        session_id TEXT,
+        topic TEXT,
+        FOREIGN KEY (patient_id) REFERENCES patients(patient_id)
+    )
+    ''')
+
 
     conn.commit()
     conn.close()
@@ -59,6 +71,17 @@ def initialize_database():
         FOREIGN KEY(patient_id) REFERENCES patients(patient_id)
     )
     ''')
+    
+    # Create topics table
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS topics (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        patient_id INTEGER,
+        session_id TEXT,
+        topic TEXT,
+        FOREIGN KEY(patient_id) REFERENCES patients(patient_id)
+    )
+    ''')
 
     conn.commit()
     conn.close()
@@ -85,6 +108,26 @@ def insert_session_data(patient_id, session_id, sentence, speaker, sentiment, se
     INSERT INTO sessions (patient_id, session_id, sentence, speaker, sentiment, sentiment_score)
     VALUES (?, ?, ?, ?, ?, ?)
     ''', (patient_id, session_id, sentence, speaker, sentiment, sentiment_score))
+
+    conn.commit()
+    conn.close()
+    
+def insert_topic(patient_id, session_id, topic):
+    """
+    Inserts a detected topic into the topics table.
+
+    Args:
+    - patient_id (int): The ID of the patient.
+    - session_id (str): The ID of the session.
+    - topic (str): The topic detected during the session.
+    """
+    conn = sqlite3.connect('patient_sessions.db')
+    cursor = conn.cursor()
+
+    cursor.execute('''
+        INSERT INTO topics (patient_id, session_id, topic)
+        VALUES (?, ?, ?)
+    ''', (patient_id, session_id, topic))
 
     conn.commit()
     conn.close()
@@ -168,6 +211,33 @@ def fetch_session_data(patient_id, session_id):
     return session_data
 
 
+def fetch_session_topics(patient_id, session_id):
+    """
+    Fetches the topics related to a specific session for a patient from the database.
+
+    Args:
+    - patient_id (int): The ID of the patient.
+    - session_id (str): The ID of the session.
+
+    Returns:
+    - List[str]: A list of topics discussed in the session.
+    """
+    conn = sqlite3.connect('patient_sessions.db')
+    cursor = conn.cursor()
+
+    cursor.execute('''
+    SELECT topic FROM topics WHERE patient_id = ? AND session_id = ?
+    ''', (patient_id, session_id))
+
+    results = cursor.fetchall()
+    conn.close()
+
+    # Extract topics from the query result
+    session_topics = [row[0] for row in results]
+
+    return session_topics
+
+
 def get_all_patients():
     """Fetches all patients from the database."""
     conn = sqlite3.connect('patient_sessions.db')  # Replace 'patients.db' with your actual database file
@@ -210,11 +280,15 @@ def get_patient_info(patient_id):
     cursor.execute("SELECT DISTINCT session_id FROM sessions WHERE patient_id = ?", (patient_id,))
     session_ids = cursor.fetchall()
     
-    # Fetch session data for each session and add to the patient_info dictionary
+    # Fetch session data and topics for each session and add to the patient_info dictionary
     for session_id in session_ids:
         session_data = fetch_session_data(patient_id, session_id[0])
-        patient_info['sessions'].append({'session_id': session_id[0], 'session_data': session_data})
-    
+        session_topics = fetch_session_topics(patient_id, session_id[0])
+        patient_info['sessions'].append({
+            'session_id': session_id[0],
+            'session_data': session_data,
+            'session_topics': session_topics  # Add session topics to each session
+        })
     
     conn.close()
     return patient_info

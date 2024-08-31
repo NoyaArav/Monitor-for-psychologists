@@ -226,22 +226,9 @@ def main():
 
                 # Display emotional changes analysis
                 st.subheader("Topics Which Caused Emotional Changes During This Session")
-                patient_data = [entry for entry in session['session_data'] if entry['speaker'] == 'patient']
-                threshold = 3  # Example threshold for detecting drastic changes
-
-                drastic_changes = detect_drastic_changes(patient_data, threshold)
-                topics = []
-
-                for change in drastic_changes:
-                    id1, id2, change_value = change
-                    context = [entry for entry in session['session_data'] if id1 - 3 <= entry['id'] <= id2 + 3]
-                    sentence_1 = next(item['sentence'] for item in patient_data if item['id'] == id1)
-                    sentence_2 = next(item['sentence'] for item in patient_data if item['id'] == id2)
-                    emotion_1 = next(item['sentiment'] for item in patient_data if item['id'] == id1)
-                    emotion_2 = next(item['sentiment'] for item in patient_data if item['id'] == id2)
-
-                    topic = identify_topic_of_change([item['sentence'] for item in context], sentence_1, sentence_2, change_value, emotion_1, emotion_2, "patient")
-                    topics.append(topic)
+                
+                # Get topics directly from session info and clean them
+                topics = [topic.replace("Topic: ", "") for topic in session['session_topics']]
 
                 if topics:
                     for topic in topics:
@@ -249,6 +236,7 @@ def main():
                 else:
                     st.write("No drastic emotional changes detected in this session.")
 
+                
                 # Display psychologist's sentiment graph
                 st.subheader("Psychologist's Sentiment Analysis")
                 sentiment_graph_Psychologist = generate_sentiment_graph(session['session_data'], f"Psychologist Sentiment Analysis - {selected_session}", psychologist_sentiment_scores, "psychologist")

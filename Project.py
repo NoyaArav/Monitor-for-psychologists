@@ -11,7 +11,7 @@ from plotly.subplots import make_subplots
 import textwrap
 
 from embedding_handler import generate_embedding, generate_query_embedding, search_similar_sentences
-from database_handler import create_tables, insert_session_data, update_session_embedding, add_patient, fetch_patient_embeddings, fetch_session_data
+from database_handler import create_tables, insert_session_data, update_session_embedding, add_patient, fetch_patient_embeddings, fetch_session_data, insert_topic
 
 aai.settings.api_key = "7a43eb14db35446586c8e9938f2b947c"
 
@@ -209,6 +209,9 @@ def process_session(audio_file, patient_id, session_id):
     speaker_roles = determine_speaker_roles(transcript)
     psychologist_speaker = speaker_roles['psychologist']
     patient_speaker = speaker_roles['patient']
+    
+    # Initialize an empty list to collect session data for topic detection later
+    session_data = []
 
     for i, utterance in enumerate(transcript.utterances):
         is_patient = utterance.speaker == patient_speaker
@@ -223,6 +226,15 @@ def process_session(audio_file, patient_id, session_id):
 
         # Insert session data into the database
         insert_session_data(patient_id, session_id, utterance.text, speaker, sentiment, score)
+        
+        # Collect session data in a list for later use in topic detection
+        session_data.append({
+            'id': i + 1,  # Assuming ID is the index + 1
+            'sentence': utterance.text,
+            'speaker': speaker,
+            'sentiment': sentiment,
+            'sentiment_score': score
+        })
 
         print(f"{speaker.capitalize()}: {utterance.text}")
         print(f"Sentiment: {sentiment}, Score: {score}")
@@ -230,10 +242,51 @@ def process_session(audio_file, patient_id, session_id):
         # Generate and update embedding
         embedding = generate_embedding(utterance.text)
         update_session_embedding(session_id, utterance.text, embedding)
+    
+    # Detect topics causing drastic emotional changes
+    detect_and_store_topics(patient_id, session_id, session_data)
 
     print("Session processing and data storage completed successfully.")
     
-    
+
+def detect_and_store_topics(patient_id, session_id, session_data):
+    """
+    Detects topics that caused drastic emotional changes and stores them in the database.
+
+    Args:
+    - patient_id (int): The ID of the patient.
+    - session_id (str): The ID of the session.
+    - session_data (list): A list of dictionaries containing session data.
+    """
+    # Filter patient data from session data
+    patient_data = [entry for entry in session_data if entry['speaker'] == 'patient']
+    threshold = 3  # Example threshold for detecting drastic changes
+
+    # Detect drastic changes in sentiment
+    drastic_changes = detect_drastic_changes(patient_data, threshold)
+    topics = []
+
+    for change in drastic_changes:
+        id1, id2, change_value = change
+        context = [entry for entry in session_data if id1 - 3 <= entry['id'] <= id2 + 3]
+        sentence_1 = next(item['sentence'] for item in patient_data if item['id'] == id1)
+        sentence_2 = next(item['sentence'] for item in patient_data if item['id'] == id2)
+        emotion_1 = next(item['sentiment'] for item in patient_data if item['id'] == id1)
+        emotion_2 = next(item['sentiment'] for item in patient_data if item['id'] == id2)
+
+        # Identify the topic of change
+        topic = identify_topic_of_change([item['sentence'] for item in context], sentence_1, sentence_2, change_value, emotion_1, emotion_2, "patient")
+        topics.append(topic)
+
+    # Insert detected topics into the database
+    if topics:
+        for topic in topics:
+            insert_topic(patient_id, session_id, topic)
+            print(f"Inserted topic: {topic}")
+    else:
+        print("No drastic emotional changes detected in this session.")
+
+
     
 def process_audio_file(patient_id, audio_file):
     """
