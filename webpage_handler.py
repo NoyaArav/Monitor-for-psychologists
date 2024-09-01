@@ -5,9 +5,15 @@ import plotly.graph_objs as go
 from streamlit_option_menu import option_menu
 
 # Placeholder for functions to handle database interactions and data processing
-from database_handler import get_patient_info, get_all_patients, add_patient, initialize_database
+from database_handler import get_patient_info, get_all_patients, add_patient, initialize_database , fetch_session_data
 from embedding_handler import search_similar_sentences
 from Project import process_audio_file, generate_sentiment_graph, detect_drastic_changes, identify_topic_of_change, identify_topics_to_revisit
+
+# Initialize session state variables
+if 'search_results' not in st.session_state:
+    st.session_state.search_results = []
+if 'show_transcript' not in st.session_state:
+    st.session_state.show_transcript = {}
 
 # Sentiment score dictionaries
 patient_sentiment_scores = {
@@ -85,6 +91,37 @@ def add_new_patient_page():
             st.session_state.add_patient_mode = False
             st.rerun()
 
+def show_transcript_section(patient_id, session_id, sentence_number):
+    """
+    Fetches and displays a section of the transcript around the given sentence number.
+    """
+    # Fetch the entire session data
+    session_data = fetch_session_data(patient_id, session_id)
+    
+    # Determine the range of sentences to display (5 before and 5 after)
+    start_index = max(0, sentence_number - 6)
+    end_index = min(len(session_data), sentence_number + 5)
+    
+    # Create an expander for the transcript section
+    with st.expander(f"Transcript Section (Session {session_id})", expanded=True):
+        for i in range(start_index, end_index):
+            entry = session_data[i]
+            if entry['speaker'].lower() == "patient":
+                speaker_display = "Patient"
+                sentence_color = "#a455e0"
+            else:
+                speaker_display = "Psychologist"
+                sentence_color = "#1263e6"
+            
+            # Highlight the searched sentence
+            if i == sentence_number - 1:
+                st.markdown(f"<span style='color: {sentence_color}; background-color: yellow;'><strong>{i+1}. {speaker_display}:</strong> {entry['sentence']}</span>", unsafe_allow_html=True)
+            else:
+                st.markdown(f"<span style='color: {sentence_color};'><strong>{i+1}. {speaker_display}:</strong> {entry['sentence']}</span>", unsafe_allow_html=True)
+
+def toggle_transcript(key):
+    st.session_state[key] = not st.session_state[key]
+    
 # Function to display the home page
 def home_page():
     st.title("Welcome to the Psychological Sessions Monitor")
@@ -194,33 +231,52 @@ def main():
                 else:
                     selected_session_ids = [option.split()[1] for option in sessions_to_search]
 
-                print(selected_session_ids)
+                st.session_state.search_results = search_similar_sentences(selected_patient['patient_id'], search_query, selected_session_ids)
+                
+                # Initialize show_transcript state for new search results
+                for result in st.session_state.search_results:
+                    key = f"show_transcript_{result['session_id']}_{result['sentence_number']}"
+                    if key not in st.session_state:
+                        st.session_state[key] = False
 
-                search_results = search_similar_sentences(selected_patient['patient_id'], search_query, selected_session_ids)
-
-                if search_results:
-                    st.markdown("<span style='font-size:20px; font-weight:bold; text-decoration:underline;'>Search Results:</span>", unsafe_allow_html=True)
-                    for result in search_results:
-                        # Determine the speaker and sentence color based on the speaker
-                        if result['speaker'].lower() == 'patient':
-                            speaker_name = patient_info['name']
-                            sentence_color = '#a455e0'
-                        elif result['speaker'].lower() == 'psychologist':
-                            speaker_name = 'you'
-                            sentence_color = '#1295e6'
-                        else:
-                            speaker_name = result['speaker']
-                            sentence_color = 'black'  # Default color if speaker is neither patient nor psychologist
-                        
-                        # Create a formatted string for the session, sentence number, and speaker
-                        session_info = f"**<span style='font-size:18px;'>Session {result['session_id']} | Sentence {result['sentence_number']} | {speaker_name}:</span>**"
-
-                        
-                        # Display the session info in bold and larger font size, and the sentence in the desired color
-                        st.markdown(session_info, unsafe_allow_html=True)
-                        st.markdown(f"<span style='font-size:16px; color:{sentence_color};'>{result['sentence']}</span>", unsafe_allow_html=True)
-                else:
-                    st.write("No results found.")
+            if st.session_state.search_results:
+                st.markdown("<span style='font-size:20px; font-weight:bold; text-decoration:underline;'>Search Results:</span>", unsafe_allow_html=True)
+                for i, result in enumerate(st.session_state.search_results):
+                    # Determine the speaker and sentence color based on the speaker
+                    if result['speaker'].lower() == 'patient':
+                        speaker_name = patient_info['name']
+                        sentence_color = '#a455e0'
+                    elif result['speaker'].lower() == 'psychologist':
+                        speaker_name = 'you'
+                        sentence_color = '#1295e6'
+                    else:
+                        speaker_name = result['speaker']
+                        sentence_color = 'black'
+                    
+                    # Create a formatted string for the session, sentence number, and speaker
+                    session_info = f"**<span style='font-size:18px;'>Session {result['session_id']} | Sentence {result['sentence_number']} | {speaker_name}:</span>**"
+                    
+                    # Display the session info in bold and larger font size, and the sentence in the desired color
+                    st.markdown(session_info, unsafe_allow_html=True)
+                    st.markdown(f"<span style='font-size:16px; color:{sentence_color};'>{result['sentence']}</span>", unsafe_allow_html=True)
+                    
+                    # Create a unique key for each show_transcript state
+                    transcript_key = f"show_transcript_{result['session_id']}_{result['sentence_number']}"
+                    
+                    # Add a button to show/hide the transcript section
+                    button_text = "Hide Transcript" if st.session_state[transcript_key] else "Show Transcript"
+                    st.button(
+                        f"{button_text} (Session {result['session_id']})",
+                        key=f"btn_{i}",
+                        on_click=toggle_transcript,
+                        args=(transcript_key,)
+                    )
+                    
+                    # Show transcript if state is True
+                    if st.session_state[transcript_key]:
+                        show_transcript_section(selected_patient['patient_id'], result['session_id'], result['sentence_number'])
+            elif st.session_state.search_results == []:
+                st.write("No results found.")
 
 
         elif st.session_state.current_page == "Transcripts":
@@ -285,8 +341,11 @@ def main():
 
             if st.button("Upload"):
                 if audio_file is not None:
-                    process_audio_file(selected_patient['patient_id'], audio_file)
+                    with st.spinner('Processing audio file... This may take a few minutes.'):
+                        process_audio_file(selected_patient['patient_id'], audio_file)
                     st.success("Session added successfully!")
+                else:
+                    st.error("Please upload an audio file before clicking 'Upload'.")
     else:
         home_page()
 

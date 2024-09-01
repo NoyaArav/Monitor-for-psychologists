@@ -37,8 +37,8 @@ psychologist_sentiment_scores = {
 
 def get_sentiment(text, is_patient):
     prompt = f"""
-    Analyze the sentiment of the following text. Respond with:
-    1. A single word (not the word positive or negative ) or short phrase that best describes the emotion.
+    Analyze what sentiment the {"patient" if is_patient else "psychologist"} is experiencing when saying the following text, which is a part of a psychologist-patient conversation. Respond with:
+    1. A single word (not the word positive or negative) or short phrase that best describes the emotion.
     2. A number between -10 and 10 representing the intensity and polarity of the emotion, where:
        - -10 represents the most extreme negative emotion (e.g., severe depression, intense hatred)
        - 0 represents a neutral state
@@ -57,11 +57,17 @@ def get_sentiment(text, is_patient):
     )
 
     result = response.choices[0].message.content.strip()
-    sentiment, score = result.split(', ')
-    sentiment = sentiment.split(': ')[1]
-    score = float(score.split(': ')[1])
-
-    return sentiment, score
+    try:
+        if ',' not in result:
+            raise ValueError("Unexpected response format")
+        
+        sentiment, score = result.split(', ')
+        sentiment = sentiment.split(': ')[1]
+        score = float(score.split(': ')[1])
+        return sentiment, score
+    except (ValueError, IndexError):
+        print(f"Warning: Unexpected response format. Raw response: {result}")
+        return None, 0
 
     
 def determine_speaker_roles(transcript):
@@ -269,6 +275,12 @@ def detect_and_store_topics(patient_id, session_id, session_data):
     for change in drastic_changes:
         id1, id2, change_value = change
         context = [entry for entry in session_data if id1 - 3 <= entry['id'] <= id2 + 3]
+
+        # Check if there are at least 6 sentences in the context
+        if len(context) < 7:
+            print(f"Skipping change {id1} to {id2} due to insufficient context")
+            continue
+
         sentence_1 = next(item['sentence'] for item in patient_data if item['id'] == id1)
         sentence_2 = next(item['sentence'] for item in patient_data if item['id'] == id2)
         emotion_1 = next(item['sentiment'] for item in patient_data if item['id'] == id1)
@@ -350,7 +362,7 @@ def get_topics_to_revisit(prev_session_topics, last_session_topics):
     
     Topics from the last session: {last_session_topics}
     
-    Provide a list of topics from the first list that are not present in the second list, taking into account synonyms or different phrasings.
+    Provide just a list (withot any other heading or prefix like "topic" or more information) of topics from the first list that are not present in the second list, taking into account synonyms or different phrasings.
     Please includee in your response only the topics, without further information. thank you.
     """
 
@@ -443,11 +455,11 @@ def generate_sentiment_graph(session_data, title, sentiment_scores , speaker):
     Returns:
     - A Plotly Figure object representing the sentiment graph.
     """
-   # Filter for specific speaker sentences
+# Filter for specific speaker sentences
     speaker_data = [row for row in session_data if row['speaker'].lower() == speaker.lower() and row['sentiment'] is not None]
 
-    # Extract data, using the 'id' as the sentence number
-    x = [row['id'] for row in speaker_data]
+    # Extract data, using enumeration starting from 1 for x values
+    x = list(range(1, len(speaker_data) + 1))
     y = [row['sentiment_score'] for row in speaker_data]
     text = [row['sentence'] for row in speaker_data]
     sentiments = [row['sentiment'] for row in speaker_data]
@@ -490,6 +502,13 @@ def generate_sentiment_graph(session_data, title, sentiment_scores , speaker):
         )
     )
 
+    # Calculate the range for x-axis ticks
+    x_max = max(x)
+    x_range_max = ((x_max // 10) + 1) * 10  # Round up to nearest 10
+
+    # Generate tick values at intervals of 10
+    tick_values = list(range(0, x_range_max + 1, 10))
+
     # Update layout
     fig.update_layout(
         title=title,
@@ -503,8 +522,9 @@ def generate_sentiment_graph(session_data, title, sentiment_scores , speaker):
         ),
         xaxis=dict(
             tickmode='array',
-            tickvals=x,  # Use actual sentence numbers for x-axis ticks
-            range=[min(x) - 1, max(x) + 1],
+            tickvals=tick_values,
+            ticktext=[str(val) for val in tick_values],
+            range=[0, x_range_max],
         ),
         showlegend=False,
         width=1000,
