@@ -16,7 +16,7 @@ from database_handler import create_tables, insert_session_data, update_session_
 aai.settings.api_key = "7a43eb14db35446586c8e9938f2b947c"
 
 client = OpenAI(
-  api_key = "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"
+  api_key = "your-openAI-key"
 )
 openai_api_model = "gpt-3.5-turbo"
 
