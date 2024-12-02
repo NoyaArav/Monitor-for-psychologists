@@ -104,17 +104,6 @@ The **Patient Monitor System** is an innovative AI-powered platform designed to 
 
 ---
 
-## Contributing
-
-Contributions are welcome! Please open an issue or submit a pull request to suggest changes or enhancements.
-
----
-
-## License
-
-This project is licensed under the [MIT License](LICENSE).
-
----
 
 ## Contact
 
